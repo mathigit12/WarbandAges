@@ -16,34 +16,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Locate project
+      - name: Extract and locate Godot project
         shell: bash
         run: |
           set -e
 
+          mkdir -p project
+
           if [ -f files.zip ]; then
-            mkdir -p project
             unzip -q -o files.zip -d project
+          fi
 
-            PROJECT_FILE=$(find project -type f -name project.godot -print -quit)
+          if [ -f project/game.zip ]; then
+            mkdir -p project/game
+            unzip -q -o project/game.zip -d project/game
+          fi
 
-            if [ -z "$PROJECT_FILE" ]; then
-              echo "ERROR: project.godot not found inside files.zip"
-              find project -maxdepth 4 -type f | head -80
-              exit 1
-            fi
+          PROJECT_FILE=$(find project -type f -name project.godot -print -quit)
 
-            PROJECT_DIR=$(dirname "$PROJECT_FILE")
-          elif [ -f project.godot ]; then
-            PROJECT_DIR="."
-          else
-            echo "ERROR: Neither files.zip nor project.godot was found"
-            ls -la
+          if [ -z "$PROJECT_FILE" ]; then
+            echo "ERROR: project.godot not found"
+            find project -maxdepth 5 -type f | head -100
             exit 1
           fi
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Godot project directory: $PROJECT_DIR"
+          PROJECT_DIR=$(dirname "$PROJECT_FILE")
+          echo "PROJECT_DIR=$GITHUB_WORKSPACE/$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Found Godot project: $PROJECT_DIR"
 
       - uses: actions/setup-java@v4
         with:
@@ -103,25 +102,14 @@ jobs:
           SETTINGS
           done
 
-          echo "Android SDK: $SDK"
-          echo "Java home: $JAVA_HOME"
-
       - name: Validate project
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
           test -f project.godot
-
-          echo "Project files:"
-          ls -la
-
-          echo "Export presets:"
-          if [ -f export_presets.cfg ]; then
-            cat export_presets.cfg
-          else
-            echo "WARNING: export_presets.cfg is missing"
-          fi
+          test -f export_presets.cfg
+          echo "Godot project and export presets found."
 
       - name: Import project resources
         working-directory: ${{ env.PROJECT_DIR }}
@@ -142,7 +130,6 @@ jobs:
         shell: bash
         run: |
           set -e
-
           mkdir -p build
 
           "$GODOT_BIN" --headless --verbose \
