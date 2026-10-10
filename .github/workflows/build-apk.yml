@@ -21,7 +21,7 @@ jobs:
         run: |
           set -e
 
-          if [ -f game.zip ]; then
+         if [ -f files.zip ]; then
             mkdir -p project
             unzip -q -o game.zip -d project
 
