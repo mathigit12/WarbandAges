@@ -1,3 +1,4 @@
+
 name: Build Android APK
 
 on:
@@ -11,18 +12,38 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Locate project (supports a single uploaded game.zip)
+      - name: Locate project
+        shell: bash
         run: |
+          set -e
+
           if [ -f game.zip ]; then
-            mkdir -p project && unzip -q -o game.zip -d project
-            echo "PROJECT_DIR=project" >> "$GITHUB_ENV"
+            mkdir -p project
+            unzip -q -o game.zip -d project
+
+            PROJECT_FILE=$(find project -type f -name project.godot -print -quit)
+
+            if [ -z "$PROJECT_FILE" ]; then
+              echo "ERROR: project.godot not found inside game.zip"
+              find project -maxdepth 4 -type f | head -80
+              exit 1
+            fi
+
+            PROJECT_DIR=$(dirname "$PROJECT_FILE")
+          elif [ -f project.godot ]; then
+            PROJECT_DIR="."
           else
-            echo "PROJECT_DIR=." >> "$GITHUB_ENV"
+            echo "ERROR: Neither game.zip nor project.godot was found"
+            ls -la
+            exit 1
           fi
-          test -f "$(grep PROJECT_DIR $GITHUB_ENV | cut -d= -f2)/project.godot"
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Godot project directory: $PROJECT_DIR"
 
       - uses: actions/setup-java@v4
         with:
@@ -30,28 +51,47 @@ jobs:
           java-version: "17"
 
       - name: Install Godot and export templates
+        shell: bash
         run: |
           set -e
           cd "$RUNNER_TEMP"
-          curl -sL -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
-          curl -sL -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+
+          curl -fL -o godot.zip \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+
+          curl -fL -o templates.tpz \
+            "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+
           unzip -q godot.zip
           mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" godot
           chmod +x godot
+
           mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
           unzip -q templates.tpz -d tpl
           mv tpl/templates/* "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/"
+
           echo "GODOT_BIN=$RUNNER_TEMP/godot" >> "$GITHUB_ENV"
 
-      - name: Configure Android SDK + debug keystore for Godot
+      - name: Configure Android SDK and debug keystore
+        shell: bash
         run: |
           set -e
-          keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore "$HOME/debug.keystore" \
-            -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
+
           SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+
+          keytool -keyalg RSA -genkeypair \
+            -alias androiddebugkey \
+            -keypass android \
+            -keystore "$HOME/debug.keystore" \
+            -storepass android \
+            -dname "CN=Android Debug,O=Android,C=US" \
+            -validity 9999 \
+            -deststoretype pkcs12
+
           mkdir -p "$HOME/.config/godot"
+
           for f in editor_settings-4.tres editor_settings-4.3.tres; do
-          cat > "$HOME/.config/godot/$f" << SETTINGS
+            cat > "$HOME/.config/godot/$f" << SETTINGS
           [gd_resource type="EditorSettings" format=3]
 
           [resource]
@@ -62,20 +102,53 @@ jobs:
           export/android/debug_keystore_pass = "android"
           SETTINGS
           done
-          cat "$HOME/.config/godot/editor_settings-4.3.tres"
+
+          echo "Android SDK: $SDK"
+          echo "Java home: $JAVA_HOME"
+
+      - name: Validate project
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -e
+          test -f project.godot
+          echo "Project files:"
+          ls -la
+          echo "Export presets:"
+          if [ -f export_presets.cfg ]; then
+            cat export_presets.cfg
+          else
+            echo "WARNING: export_presets.cfg is missing"
+          fi
 
       - name: Import project resources
         working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
         run: |
-          "$GODOT_BIN" --headless --verbose --import || true
-          "$GODOT_BIN" --headless --verbose --import || true
+          set -e
+          "$GODOT_BIN" --headless --editor --path . --import
+
+      - name: Check project scripts
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -e
+          "$GODOT_BIN" --headless --path . --editor --quit
 
       - name: Export APK
         working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
         run: |
+          set -e
+
           mkdir -p build
-          "$GODOT_BIN" --headless --verbose --export-debug "Android" build/WarbandAges.apk
-          ls -la build
+
+          "$GODOT_BIN" --headless --verbose \
+            --path . \
+            --export-debug "Android" build/WarbandAges.apk
+
+          test -f build/WarbandAges.apk
+          ls -lh build/WarbandAges.apk
 
       - uses: actions/upload-artifact@v4
         with:
